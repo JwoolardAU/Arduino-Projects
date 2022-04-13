@@ -225,7 +225,7 @@ def Tello_Vision(tello,board):
 			battery_status = tello.get_battery()
 		except:
 			battery_status = -1
-		cv2.putText(image, "Battery: {}".format(battery_status), (5, 720 - 5), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+		cv2.putText(image, "Battery: {}".format(battery_status), (5, 720 - 5), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 		cv2.imshow('Tello-Vision', image)
 		if pb1 and pb2:
 			break
@@ -241,7 +241,7 @@ def Tello_Vision(tello,board):
 			battery_status = tello.get_battery() 
 		except:
 			battery_status = -1
-		cv2.putText(image, "Battery: {}".format(battery_status), (5, 720 - 5), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+		cv2.putText(image, "Battery: {}".format(battery_status), (5, 720 - 5), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 		cv2.imshow('Tello-Vision', image)
 		if pb1 and pb2:
 			break
