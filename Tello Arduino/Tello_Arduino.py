@@ -9,8 +9,14 @@ import pyfirmata
 import time
 from djitellopy import Tello
 import sys
+import cv2
+import threading
 
-# This controller is for circuits designed with only push button inputs for drone control
+
+
+'''
+This controller is for circuits designed with only push button inputs for drone control
+'''
 def BB_Controller():
 
 	# object instantiations
@@ -89,7 +95,10 @@ def BB_Controller():
 		time.sleep(0.1)
 
 
-# This controller is for circuits designed with joystick inputs for drone control
+
+'''
+This controller is for circuits designed with joystick inputs for drone control
+'''
 def JS_Controller():
 
 	# object instantiations
@@ -97,7 +106,7 @@ def JS_Controller():
 	tello.connect()
 
 	#board = pyfirmata.Arduino('/dev/ttyACM0') # Use this when on linux OS
-	board = pyfirmata.Arduino('COM6') # Use this when on windows OS
+	board = pyfirmata.Arduino('COM6') # Use this when on windows OS	
 
 	it = pyfirmata.util.Iterator(board)
 	it.start()
@@ -105,11 +114,16 @@ def JS_Controller():
 	board.digital[2].mode = pyfirmata.INPUT # PB 1
 	board.digital[3].mode = pyfirmata.INPUT # PB 2
 	
-	board.analog[0].enable_reporting() # x val
-	board.analog[1].enable_reporting() # y val
+	board.analog[0].enable_reporting() # x val (Joystick 1)
+	board.analog[1].enable_reporting() # y val (Joystick 1)
+
+	board.analog[2].enable_reporting() # x val (Joystick 2)
+	board.analog[3].enable_reporting() # y val (Joystick 2)
 
 	print("Currently awaiting takeoff. (Press both buttons)")
 
+	# Start thread to handle camera and drone battery display
+	threading.Thread(target=Tello_Vision, args=(tello,board,), daemon=True).start() 
 
 	# takeoff control loop
 	while True:
@@ -136,17 +150,20 @@ def JS_Controller():
 		speed = 50 # Default speed
 
 	print("In command mode.")
-
-	while True : 
+	
+	up_down_speed = 0
+	while True :
 		pb1 = board.digital[2].read()
 		pb2 = board.digital[3].read()
 		
-		x_val = board.analog[0].read()
-		y_val = board.analog[1].read()
+		x_val1 = board.analog[0].read() 
+		y_val1 = board.analog[1].read()
+		x_val2 = board.analog[2].read()
+		y_val2 = board.analog[3].read()
 
 		# For testing purposes (comment out as needed)
-		# print(f"x val: {x_val}")
-		# print(f"y val: {y_val}")
+		# print(f"x val: {x_val1}")
+		# print(f"y val: {y_val1}")
 		# print()
 
 		## JOYSTICK RULES W/ WIRES ON LEFT ##
@@ -156,49 +173,11 @@ def JS_Controller():
 		# LEFT: Y = .50 X = 0
 		# RIGHT: Y = .50 X = 1
 
+		x_num = -1 * Normalize_JS(x_val1,speed) # -1 * when the drone is facing away
+		y_num = Normalize_JS(y_val1,speed)
+		yaw_speed = Normalize_JS(x_val2,speed)
+		up_down_speed = Normalize_JS(y_val2,speed)
 
-		# Normalize joystick input relative to desired direction 
-		if y_val is not None:
-			#### Y AXIS ####
-			if y_val < .50: # MOVE FORWARD (Ex: I want to move forward w/ speed of +30)
-				# Ex: y_val = .35
-				y_num = y_val * 200 # y_num = 70
-				y_num = int(100 - y_num) # y_num = 30
-			elif y_val >= .50: # MOVE BACK (Ex: I want to move back w/ speed of -30)
-				# Ex: y_val = .65
-				y_num = y_val - .5  # y_num = .15
-				y_num = -1* int(y_num * 200) # y_num = -30
-	
-		if x_val is not None:
-			#### X AXIS ####
-			if x_val < .50: # MOVE LEFT (I want to move left w/ speed of -30)
-				# Ex: x_val = .35
-				x_num = x_val * 200 # x_num = 70
-				x_num = -1 * int(100 - x_num) # x_num = 30
-			elif x_val >= .50: # MOVE RIGHT (I want to move right w/ speed of +30)
-				# Ex: y_val = .65
-				x_num = x_val - .5  # x_num = .15
-				x_num = int(x_num * 200) # x_num = -30
-		
-
-		# Handle min-max speed conditions
-		if y_val is not None and x_val is not None:
-
-			if abs(y_num) < 10:
-				y_num = 0
-			elif abs(y_num) > speed:
-				if y_num < 0: 
-					y_num = -speed
-				else:
-					y_num = speed
-
-			if abs(x_num) < 10:
-				x_num = 0
-			elif abs(x_num) > speed:
-				if x_num < 0: 
-					x_num = -speed
-				else:
-					x_num = speed
 
 		# For testing purposes (comment out as needed)
 		# if y_val is not None and x_val is not None: 
@@ -206,7 +185,6 @@ def JS_Controller():
 		# 	print(f"y_num: {y_num}")
 		# 	print()
 
-		tello.send_rc_control(x_num, y_num, 0, 0)
 
 		# input layout is more or less arbitrary. Change as desired...
 		if pb1 and pb2:
@@ -214,18 +192,101 @@ def JS_Controller():
 			board.digital[7].write(0)
 			tello.land()
 			break
+		elif pb1: # move drone up
+			#up_down_speed = speed
+			tello.send_command_without_return("flip f")
+		elif pb2: # move drone down
+			#up_down_speed = -speed
+			tello.send_command_without_return("flip b")
+
+		# Send the actual flight command
+		tello.send_rc_control(x_num, y_num, up_down_speed, yaw_speed)
+
+		time.sleep(0.01)
 
 
 
-		time.sleep(0.1)
+'''
+This function is spun off as its own thread in order to see what the tello drone sees.
+Camera frame errors may show in terminal due to missing some inital frames, but they can be ignored.
+'''
+def Tello_Vision(tello,board):
+	tello.streamon()
+	cap = tello.get_frame_read()
+
+	# Current design is too account for inital takeoff double press.
+	# This is sloppy and should be changed by a dedicated button or I/O later.
+	while True:
+		pb1 = board.digital[2].read()
+		pb2 = board.digital[3].read()
+		cv2.waitKey(1)
+		image = cap.frame
+		try:
+			battery_status = tello.get_battery()
+		except:
+			battery_status = -1
+		cv2.putText(image, "Battery: {}".format(battery_status), (5, 720 - 5), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+		cv2.imshow('Tello-Vision', image)
+		if pb1 and pb2:
+			break
+
+	time.sleep(2) # gives you some time to take hands off of landing buttons
+
+	while True:
+		pb1 = board.digital[2].read()
+		pb2 = board.digital[3].read()
+		cv2.waitKey(1)
+		image = cap.frame
+		try:
+			battery_status = tello.get_battery() 
+		except:
+			battery_status = -1
+		cv2.putText(image, "Battery: {}".format(battery_status), (5, 720 - 5), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+		cv2.imshow('Tello-Vision', image)
+		if pb1 and pb2:
+			break
+
+	cv2.destroyAllWindows()
+
+
+
+'''
+This function takes maps the analog inputs of the joysticks and normalizes them to speeds for the tello rc_speed function.
+'''
+def Normalize_JS(val,speed):
+	# Normalize joystick input relative to desired direction 
+		if val is not None:
+			#### X OR Y AXIS ####
+			if val < .50: # MOVE FORWARD (Ex: I want to move forward w/ speed of +30)
+				# Ex: y_val = .35
+				num = val * 200 # y_num = 70
+				num = int(100 - num) # y_num = 30
+			elif val >= .50: # MOVE BACK (Ex: I want to move back w/ speed of -30)
+				# Ex: y_val = .65
+				num = val - .5  # y_num = .15
+				num = -1* int(num * 200) # y_num = -30
+			
+			# Handle min-max speed conditions
+			if abs(num) < 10:
+				num = 0
+			elif abs(num) > speed:
+				if num < 0: 
+					num = -speed
+				else:
+					num = speed
+		
+		else:
+			num = 0
+
+		
+		return num
 
 
 
 ##### Main #####
 
 if "-BB" in sys.argv:
-	BB_Controller(
+	BB_Controller()
 else:
 	JS_Controller()
-
 
